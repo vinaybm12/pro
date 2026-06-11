@@ -1,0 +1,55 @@
+
+#!/bin/bash
+
+REGION="ap-south-1"
+LOG_GROUP="/git/commits"
+LOG_STREAM="notes-keeper"
+
+# Collect commit data
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+AUTHOR=$(git log -1 --format="%an")
+HASH=$(git log -1 --format="%h")
+MSG=$(git log -1 --format="%s")
+TS_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+TS_MS=$(date +%s%3N)
+
+# Create valid JSON payload
+PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+    'timestamp': '$TS_ISO',
+    'branch': '$BRANCH',
+    'author': '$AUTHOR',
+    'hash': '$HASH',
+    'message': '$MSG',
+    'project': 'skycast'
+}))
+")
+
+# Append to local log file
+echo "$PAYLOAD" >> commit_logs.json
+echo "[hook] Logged locally: $HASH"
+
+# Create CloudWatch event
+LOG_EVENT=$(python3 -c "
+import json
+print(json.dumps([
+    {
+        'timestamp': $TS_MS,
+        'message': '''$PAYLOAD'''
+    }
+]))
+")
+
+# Send to CloudWatch (disable Git Bash path conversion)
+MSYS_NO_PATHCONV=1 aws logs put-log-events \
+  --region "$REGION" \
+  --log-group-name "$LOG_GROUP" \
+  --log-stream-name "$LOG_STREAM" \
+  --log-events "$LOG_EVENT"
+
+if [ $? -eq 0 ]; then
+  echo "[hook] Shipped to CloudWatch: $HASH"
+else
+  echo "[hook] Failed to ship to CloudWatch"
+fi
